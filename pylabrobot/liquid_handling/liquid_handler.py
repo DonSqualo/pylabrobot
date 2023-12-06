@@ -6,11 +6,13 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import numbers
 import threading
 import time
 from typing import Any, Callable, Dict, Union, Optional, List, Sequence, Set, Tuple
 import warnings
+import itertools
 
 from pylabrobot.machine import MachineFrontend, need_setup_finished
 from pylabrobot.liquid_handling.strictness import Strictness, get_strictness
@@ -845,25 +847,33 @@ class LiquidHandler(MachineFrontend):
     if end_delay > 0:
       time.sleep(end_delay)
 
+
   async def transfer(
     self,
     sources: Union[Well, List[Well]],
     targets: Union[Well, List[Well]],
-    source_vol: Optional[float] = None,
+    source_vol: Optional[Union[float, List[Optional[float]]]] = None,
     ratios: Optional[List[float]] = None,
-    target_vols: Optional[List[float]] = None,
-    aspiration_flow_rate: Optional[float] = None,
+    target_vols: Optional[Union[float, List[Optional[float]]]] = None,
+    aspiration_flow_rates: Optional[Union[float, List[Optional[float]]]] = None,
     dispense_flow_rates: Optional[Union[float, List[Optional[float]]]] = None,
+    use_channels: Optional[Union[int, List[Optional[int]]]] = None,
+    reuse_tips: bool = False,
+    use_backend_kwargs: str = "both", # can take, "only_on_aspirate", "only_on_dispense", or "both"
     **backend_kwargs
   ):
     """Transfer liquid from one well to another.
+    Can transfer 1 to 1, 1 to many, many to 1, or many to many,
+    based on if sources and targets are wells or lists of wells.
 
     Examples:
 
+      1 to 1:
       Transfer 50 uL of liquid from the first well to the second well:
 
       >>> lh.transfer(plate["A1"], plate["B1"], source_vol=50)
 
+      1 to many:
       Transfer 80 uL of liquid from the first well equally to the first column:
 
       >>> lh.transfer(plate["A1"], plate["A1:H1"], source_vol=80)
@@ -876,16 +886,21 @@ class LiquidHandler(MachineFrontend):
 
       >>> lh.transfer(plate["A1"], plate["A1:H1"], target_vols=[3, 1, 4, 1, 5, 9, 6, 2])
 
+      many to 1:
+      Transfer 50 uL of liquid from the first column to the first well:
+
+      >>> lh.transfer(plate["A1:H1"], plate["H8"], target_vol=50)
+
     Args:
       source: The source well.
       targets: The target wells.
       source_vol: The volume to transfer from the source well.
       ratios: The ratios to use when transferring liquid to the target wells. If not specified, then
         the volumes will be distributed equally.
-      target_vols: The volumes to transfer to the target wells. If specified, `source_vols` and
-        `ratios` must be `None`.
+      target_vols: The volumes to transfer to the target wells.
       aspiration_flow_rate: The flow rate to use when aspirating, in ul/s. If `None`, the backend
-        default will be used.
+        default will be used. Either a single flow rate for all channels, or a list of flow rates,
+        one for each target well.
       dispense_flow_rates: The flow rates to use when dispensing, in ul/s. If `None`, the backend
         default will be used. Either a single flow rate for all channels, or a list of flow rates,
         one for each target well.
@@ -893,28 +908,42 @@ class LiquidHandler(MachineFrontend):
     Raises:
       RuntimeError: If the setup has not been run. See :meth:`~LiquidHandler.setup`.
     """
+    # specify when to use backend_kwargs for aspiration and dispense
+    # todo: add support for different backend_kwargs for aspiration and dispense
+    assert use_backend_kwargs in ["only_on_aspirate", "only_on_dispense", "both"], ValueError("use_backend_kwargs must be one of 'only_on_aspirate', 'only_on_dispense', or 'both'")
+    if use_backend_kwargs in ["both", "only_on_aspirate"]:
+      aspiration_kwargs = backend_kwargs
+    if use_backend_kwargs in ["both", "only_on_dispense"]:
+      dispense_kwargs = backend_kwargs
 
+<<<<<<< Updated upstream
     if isinstance(sources, Well):
       sources = [sources]
 
     if isinstance(targets, Well):
       targets = [targets]
+=======
+>>>>>>> Stashed changes
 
-    if isinstance(dispense_flow_rates, numbers.Rational):
-      dispense_flow_rates = [dispense_flow_rates] * len(targets)
 
-    if target_vols is not None:
-      if ratios is not None:
-        raise TypeError("Cannot specify ratios and target_vols at the same time")
-      if source_vol is not None:
-        raise TypeError("Cannot specify source_vol and target_vols at the same time")
-    else:
-      if source_vol is None:
-        raise TypeError("Must specify either source_vol or target_vols")
+    """Case 1: Single Well to Single Well"""
+    if isinstance(sources, Well) and isinstance(targets, Well):
+      # For each case, we have to recalculate all of the parameters
+      # source_vol, target_vol and ratios:
+      assert (source_vol is not None) ^ (target_vols is not None), \
+        ValueError("1 to 1: Must specify source_vol or target_vols, but not both, got", source_vol, target_vols)
+      assert source_vol is None or isinstance(source_vol, numbers.Rational) or len(source_vol) == 1, \
+        ValueError("1 to 1: source_vol must have only one value, got", source_vol)
+      assert target_vols is None or isinstance(target_vols, numbers.Rational) or len(target_vols) == 1, \
+        ValueError("1 to 1: target_vols must have only one value, got", target_vols)
+      assert ratios is None, ValueError("1 to 1: Cannot specify ratios, got", ratios)
 
-      if ratios is None:
-        ratios = [1] * len(targets)
+      # set source_vol equal to target_vol convert to list of length 1
+      volume = source_vol if source_vol is not None else target_vols
+      if isinstance(volume, float):
+        volume = [volume]
 
+<<<<<<< Updated upstream
       # ! this has to be recalculated for multiple source vols
       target_vols = [source_vol[0] * r / sum(ratios) for r in ratios]
 
@@ -924,12 +953,379 @@ class LiquidHandler(MachineFrontend):
       flow_rates=aspiration_flow_rate,
       **backend_kwargs)
     for target, vol in zip(targets, target_vols):
+=======
+      # aspiration_flow_rates: convert to list of length 1
+      assert aspiration_flow_rates is None or isinstance(aspiration_flow_rates, int) or \
+        len(aspiration_flow_rates) == 1, \
+        ValueError("1 to 1: aspiration_flow_rates must have only one value, got", aspiration_flow_rates)
+      if isinstance(aspiration_flow_rates, int):
+        aspiration_flow_rates = [aspiration_flow_rates]
+      # dispense_flow_rates: convert to list of length 1
+      assert dispense_flow_rates is None or isinstance(dispense_flow_rates, int) or len(dispense_flow_rates) == 1, \
+        ValueError("1 to 1: dispense_flow_rates must have only one value, got", dispense_flow_rates)
+      if isinstance(dispense_flow_rates, int):
+        dispense_flow_rates = [dispense_flow_rates]
+
+      # use_channels: convert to 0 or int
+      assert use_channels is None or isinstance(use_channels, int) or len(use_channels) == 1, \
+        ValueError("1 to 1: use_channels must have only one value, got", use_channels)
+      if isinstance(use_channels, list):
+        use_channels = use_channels[0]
+      if use_channels is None:
+        use_channels = 0
+
+      await self.aspirate(
+      resources=[sources],
+      vols=volume,
+      flow_rates=aspiration_flow_rates,
+      **aspiration_kwargs)
+>>>>>>> Stashed changes
       await self.dispense(
-        resources=[target],
-        vols=vol,
+        resources=[targets],
+        vols=volume,
         flow_rates=dispense_flow_rates,
-        use_channels=[0],
-        **backend_kwargs)
+        use_channels=use_channels,
+        **dispense_kwargs)
+      return
+
+    """ Case 2: Single Well to Multiple Wells """
+    if isinstance(sources, Well) and isinstance(targets, list):
+
+      # source_vol, target_vol and ratios:
+      assert (source_vol is not None) ^ (target_vols is not None), \
+        ValueError("1 to many: Must specify source_vol or target_vols, but not both, got", source_vol, target_vols)
+      assert source_vol is None or \
+        isinstance(source_vol, numbers.Rational) or \
+        len(source_vol) == 1, \
+        ValueError("1 to many: source_vol must have only one value, got", source_vol)
+      assert target_vols is None or \
+        isinstance(target_vols, numbers.Rational) or \
+        len(target_vols) == len(targets), \
+        ValueError("1 to many: target_vols must be a number or have same length as targets, got", target_vols)
+
+      def sum_mixed(x: Union[float, List[int]]) -> int:
+        return sum(x) if isinstance(x, list) else x
+
+      # source_vol: get or calculate from targets and convert to list of length 1
+      source_vol = source_vol if source_vol is not None else sum_mixed(target_vols)
+      if isinstance(source_vol, numbers.Rational):
+        source_vol = [source_vol]
+
+      # target_vols: get or calculate from sources and convert to list (based optionally on ratios)
+      if ratios is None:
+          ratios = [1] * len(targets)
+      if isinstance(target_vols, numbers.Rational):
+        target_vols = [target_vols * r / sum(ratios) for r in ratios]
+      elif target_vols is None:
+        target_vols = [source_vol[0] * r / sum(ratios) for r in ratios]
+
+      # aspiration_flow_rates: convert to list of length 1
+      assert aspiration_flow_rates is None or isinstance(aspiration_flow_rates, int) or len(aspiration_flow_rates) == 1, \
+        ValueError("1 to 1: aspiration_flow_rates must have only one value, got", aspiration_flow_rates)
+      if isinstance(aspiration_flow_rates, int):
+        aspiration_flow_rates = [aspiration_flow_rates]
+      # dispense_flow_rates: convert to list of length targets
+      assert dispense_flow_rates is None or \
+        isinstance(dispense_flow_rates, numbers.Rational) or \
+        len(dispense_flow_rates) == len(targets), \
+        ValueError("1 to 1: dispense_flow_rates must be a number or a list with the same length as targets, got", dispense_flow_rates)
+      if isinstance(dispense_flow_rates, numbers.Rational):
+        dispense_flow_rates = [dispense_flow_rates] * len(targets)
+
+      # use_channels: convert to 0 or int
+      # TODO can handle multiple channels, this way you can keep it clean
+      assert use_channels is None or isinstance(use_channels, int) or len(use_channels) == 1, \
+        ValueError("1 to many: use_channels must have only one value, got", use_channels)
+      if isinstance(use_channels, list):
+        use_channels = use_channels[0]
+      if use_channels is None:
+        use_channels = 0
+
+
+      await self.aspirate(
+      resources=[sources],
+      vols=source_vol,
+      flow_rates=aspiration_flow_rates,
+      **aspiration_kwargs)
+      for target, vol, disp_flow in zip(targets, target_vols, dispense_flow_rates):
+        await self.dispense(
+          resources=[target],
+          vols=vol,
+          flow_rates=disp_flow,
+          use_channels=[use_channels],
+          **backend_kwargs)
+      return
+
+
+    """  Case 3: Multiple Wells to Single Well """
+    if isinstance(sources, list) and isinstance(targets, Well):
+      # source_vol, target_vol and ratios:
+      assert (source_vol is not None) ^ (target_vols is not None), \
+        ValueError("many to 1: Must specify source_vol or target_vols, but not both, got", source_vol, target_vols)
+      assert source_vol is None or \
+        isinstance(source_vol, numbers.Rational) or \
+        len(source_vol) == len(sources), \
+        ValueError("many to 1: source_vol must have same length as sources, got", source_vol)
+      assert target_vols is None or \
+        isinstance(target_vols, numbers.Rational) or \
+        len(target_vols) == 1, \
+        ValueError("many to 1: target_vols must have only one value, got", target_vols)
+
+      # first target_vols: get or calculate from sources and convert to list of length 1
+      target_vols = target_vols if target_vols is not None else self.sum_mixed(source_vol)
+      if isinstance(target_vols, numbers.Rational):
+        target_vols = [target_vols]
+
+      # source_vol: get or calculate from targets and convert to list (based optionally on ratios)
+      if ratios is None:
+          ratios = [1] * len(sources)
+      if isinstance(source_vol, numbers.Rational):
+        source_vol = [source_vol * r / sum(ratios) for r in ratios]
+      elif source_vol is None:
+        source_vol = [target_vols[0] * r / sum(ratios) for r in ratios]
+
+
+      # aspiration_flow_rates: convert to list of length sources
+      assert aspiration_flow_rates is None or \
+        isinstance(aspiration_flow_rates, int) or \
+        len(aspiration_flow_rates) == len(sources), \
+        ValueError("many to 1: aspiration_flow_rates must be a number or a list with the same length as sources, got", aspiration_flow_rates)
+      if isinstance(aspiration_flow_rates, int):
+        aspiration_flow_rates = [aspiration_flow_rates] * len(sources)
+      # dispense_flow_rates: convert to list of length 1
+      assert dispense_flow_rates is None or \
+        isinstance(dispense_flow_rates, int) or \
+        len(dispense_flow_rates) == len(sources), \
+        ValueError("many to 1: dispense_flow_rates must be a number or a list with the same length as sources, got", dispense_flow_rates)
+      if isinstance(dispense_flow_rates, int):
+        dispense_flow_rates = [dispense_flow_rates] * len(sources)
+
+      # use_channels should be fine
+      # todo make 8 dynamic based on size of head
+      assert use_channels is None or \
+        isinstance(use_channels, int) or \
+        (len(use_channels) == len(sources) and len(use_channels) <= 8), \
+        ValueError("many to 1: use_channels must have same length as sources and less than 8, got", use_channels)
+      if isinstance(use_channels, int):
+        use_channels = [use_channels]
+
+      # if done with one tip, first aspirate all sources into a single tip,
+      # then dispense the entire volume at once
+      if len(use_channels) == 1:
+        for source, vol, asp_flow in zip(sources, source_vol, aspiration_flow_rates):
+          await self.aspirate(
+            resources=[source],
+            vols=vol,
+            flow_rates=asp_flow,
+            use_channels=[use_channels],
+            **aspiration_kwargs)
+        await self.dispense(
+            resources=[targets],
+            vols=target_vols,
+            flow_rates=dispense_flow_rates[0],
+            use_channels=[use_channels],
+            **backend_kwargs)
+      # if done with multiple tips, aspirate each source into seperate tip
+      # then dispense each tip into the same target
+      elif len(use_channels) > 1:
+        await self.aspirate(
+          resources=[sources],
+          vols=source_vol,
+          flow_rates=aspiration_flow_rates,
+          use_channels=[use_channels],
+          **aspiration_kwargs)
+        for channel, target, vol, disp_flow in zip(use_channels, targets, target_vols, dispense_flow_rates):
+          await self.dispense(
+            resources=[target],
+            vols=vol,
+            flow_rates=disp_flow,
+            use_channels=[channel],
+            **backend_kwargs)
+      return
+
+    """ # Case 4: Multiple Wells to Multiple Wells """
+    if isinstance(sources, list) and isinstance(targets, list):
+      # source_vol, target_vol and ratios:
+      assert source_vol is not None or target_vols is not None, \
+        ValueError("many to many: Must specify source_vol or target_vols, got", source_vol, target_vols)
+      assert source_vol is None or (isinstance(source_vol, list) and len(source_vol) == len(sources)), \
+        ValueError("many to many: source_vol must have same length as sources, got", source_vol)
+      assert target_vols is None or (isinstance(target_vols, list) and len(target_vols) == len(targets)), \
+        ValueError("many to many: target_vols must have same length as targets, got", target_vols)
+
+
+      """Case 4a: Just Source Volumes"""
+      if source_vol is not None and target_vols is None:
+        """ Case 4aI: Source Volume is int"""
+        if ratios is None:
+          ratios = [1] * len(sources)
+        # interpret source_vol as total volume
+        # if you want to specify volume for each source, pass a list: [vol] * len(sources)
+        if isinstance(source_vol, numbers.Rational):
+            source_vol = [source_vol / len(sources)] * len(sources)
+            target_vols = [source_vol * r / sum(ratios) for r in ratios]
+        """ Case 4aII: Source Volume is list"""
+        if isinstance(source_vol, list):
+          source_vol = source_vol
+          target_vols = [sum(source_vol) * r / sum(ratios) for r in ratios]
+
+      """Case 4b: Just Target Volumes"""
+      if source_vol is None and target_vols is not None:
+        """ Case 4bI: Target Volume is int"""
+        if ratios is None:
+          ratios = [1] * len(targets)
+        # interpret target_vols as total volume
+        # if you want to specify volume for each target, pass a list: [vol] * len(targets)
+        if isinstance(target_vols, numbers.Rational):
+          target_vols = [target_vols / len(targets)] * len(targets)
+          source_vol = [target_vols * r / sum(ratios) for r in ratios]
+
+        """ Case 4bII: Target Volume is list"""
+        if isinstance(target_vols, list):
+          target_vols = target_vols
+          source_vol = [sum(target_vols) * r / sum(ratios) for r in ratios]
+
+      """Case 4c: Both Source and Target Volumes"""
+      if source_vol is not None and target_vols is not None:
+        """ Case 4cI: Source Volume and Target Volume are int"""
+        assert not isinstance(source_vol, numbers.Rational) and isinstance(target_vols, numbers.Rational), \
+          ValueError("many to many: source_vol and target_vols cannot both be numbers, got", source_vol, target_vols)
+
+        """ Case 4cII: Source Volume and Target Volume is list"""
+        if isinstance(source_vol, list) and isinstance(target_vols, list):
+          assert sum(source_vol) == sum(target_vols), \
+            ValueError("many to many: source_vol and target_vols must have the same sum, got", source_vol, target_vols)
+          source_vol = source_vol
+          target_vols = target_vols
+
+        """ Case 4cIII: Source Volume is int and Target Volume is list"""
+        if isinstance(source_vol, numbers.Rational) and isinstance(target_vols, list):
+          assert source_vol == sum(target_vols), \
+            ValueError("many to many: source_vol and target_vols must have the same sum, got", source_vol, target_vols)
+          # apply ratio to sources
+          if ratios is None:
+            ratios = [1] * len(sources)
+          source_vol = [source_vol * r / sum(ratios) for r in ratios]
+          target_vols = target_vols
+
+        """ Case 4cIV: Source Volume is list and Target Volume is int"""
+        if isinstance(source_vol, list) and isinstance(target_vols, numbers.Rational):
+          assert sum(source_vol) == target_vols, \
+            ValueError("many to many: source_vol and target_vols must have the same sum, got", source_vol, target_vols)
+          # apply ratio to targets
+          if ratios is None:
+            ratios = [1] * len(targets)
+          source_vol = source_vol
+          target_vols = [target_vols * r / sum(ratios) for r in ratios]
+
+
+      # aspiration_flow_rates: convert to list of length sources
+      assert aspiration_flow_rates is None or \
+        isinstance(aspiration_flow_rates, int) or \
+        (len(aspiration_flow_rates) <= 8 and len(aspiration_flow_rates) == len(sources)), \
+        ValueError("many to many: aspiration_flow_rates must be a number or a list with the same length as sources and less than 8, got", aspiration_flow_rates)
+      if isinstance(aspiration_flow_rates, int):
+        aspiration_flow_rates = [aspiration_flow_rates] * len(sources)
+
+      # convert dispense_flow_rates to list of length targets
+      assert dispense_flow_rates is None or \
+        isinstance(dispense_flow_rates, int) or \
+        (len(dispense_flow_rates) <= 8 and len(dispense_flow_rates) == len(targets)), \
+        ValueError("many to many: dispense_flow_rates must be a number or a list with the same length as targets and less than 8, got", dispense_flow_rates)
+      if isinstance(dispense_flow_rates, int):
+        dispense_flow_rates = [dispense_flow_rates] * len(targets)
+
+      # use channels: length of list indicates if number of tips is directed by targets or sources (default)
+      assert use_channels is None or \
+        (isinstance(use_channels, list) and \
+        (len(use_channels) == len(sources)) or (len(use_channels) == len(targets))), \
+        ValueError("many to many: use_channels must have same length as sources or targets, got", use_channels)
+
+
+      assert round(sum(source_vol), 1) == round(sum(target_vols), 1), \
+        ValueError("many to many: something went wrong in the calculation of source and target volumes, got", source_vol, target_vols)
+      # now we are ready to aspirate
+
+
+      if use_channels is None:
+        use_channels = list(range(len(sources) if len(sources) <= 8 else 8))
+      self._make_sure_channels_exist(use_channels)
+
+
+      # possible cases
+      # [50, 50] to [50, 50] = true
+      # [50, 50] to [70, 30] = false, one to large, would require multiple dispenses from different tips into same well
+      # [50, 50] to [50, 20, 10] = true, if done with 3 tips
+      # [50, 50] to [50, 20, 20, 10] = true, if done with 4 tips
+      # [70, 30] to [50, 50] = false, one to large, would require multiple dispenses into
+      # [40, 40] to [10, 10, 10, 10, 10, 10, 10, 10] = true, if done with 8 tips
+      # [10, 10, 10, 10, 10, 10, 10, 10] to [40, 40] = true, if done with 8 tips
+
+      # ! only allow transforms that can be done with one set of tips
+
+      # Case 4d1: we pipette with tips based on the sources
+
+      print("N to N transfer coming soon")
+
+      """ if len(use_channels) == len(sources):
+        # check for any combinations that are not possible
+        # we can aspirate all sources into tips in one go
+        await self.aspirate(
+          resources=sources,
+          vols=source_vol,
+          flow_rates=aspiration_flow_rates,
+          use_channels=use_channels,
+          **aspiration_kwargs)
+
+        pass """
+
+      """ number_of_aspirations = 0
+      number_of_dispenses = 0
+      number_of_tips = len(use_channels)
+      asp_channel_combinations = [list(combo) for combo in itertools.combinations(use_channels, len(sources))]
+      if len(use_channels) == len(sources):
+        number_of_aspirations = 1
+        number_of_dispenses = math.ceil(len(targets) / number_of_tips)
+        asp_channel_combinations = [use_channels]
+      if len(use_channels) == len(targets):
+        assert len(use_channels) > len(sources), ValueError(f'many to many: use_channels must be greater than sources, if specified as length targets. Use an array with {len(sources)} instead. Got {use_channels}, {sources}')
+        number_of_dispenses = 1
+        number_of_aspirations = math.ceil(len(sources) / number_of_tips)
+        # we generate a list of combinations of channels to use for each aspiration
+
+      if len(use_channels) == 8:
+        number_of_aspirations = math.ceil(len(sources) / number_of_tips)
+        number_of_dispenses = math.ceil(len(targets) / number_of_tips)
+
+
+      for asp in range(number_of_aspirations):
+        # Case 1: We aspirate once and dispense many times
+        if number_of_aspirations == 1:
+          asp_volume = source_vol
+
+        # Case 2: We aspirate many times and dispense once
+        if number_of_aspirations > 1:
+          asp_volume = [vol / number_of_aspirations for vol in source_vol]
+
+        # Case 3: We aspirate in chunks of 8 and dispense in chunks of 8
+
+        await self.aspirate(
+          resources=sources,
+          vols=asp_volume,
+          flow_rates=aspiration_flow_rates,
+          use_channels=list(asp_channel_combinations[asp]),
+          **aspiration_kwargs)
+      for disp in range(number_of_dispenses):
+        if number_of_dispenses == 1:
+          disp_volume = target_vols
+        await self.dispense(
+          resources=targets,
+          vols=disp_volume,
+          flow_rates=dispense_flow_rates,
+          use_channels=use_channels,
+          **dispense_kwargs) """
+      return
+
 
   async def pick_up_tips96(
     self,
