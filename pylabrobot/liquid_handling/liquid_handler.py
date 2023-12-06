@@ -916,14 +916,11 @@ class LiquidHandler(MachineFrontend):
     if use_backend_kwargs in ["both", "only_on_dispense"]:
       dispense_kwargs = backend_kwargs
 
-<<<<<<< Updated upstream
     if isinstance(sources, Well):
       sources = [sources]
 
     if isinstance(targets, Well):
       targets = [targets]
-=======
->>>>>>> Stashed changes
 
 
     """Case 1: Single Well to Single Well"""
@@ -943,17 +940,6 @@ class LiquidHandler(MachineFrontend):
       if isinstance(volume, float):
         volume = [volume]
 
-<<<<<<< Updated upstream
-      # ! this has to be recalculated for multiple source vols
-      target_vols = [source_vol[0] * r / sum(ratios) for r in ratios]
-
-    await self.aspirate(
-      resources=[sources],
-      vols=[sum(target_vols) / len(sources)] * len(sources),
-      flow_rates=aspiration_flow_rate,
-      **backend_kwargs)
-    for target, vol in zip(targets, target_vols):
-=======
       # aspiration_flow_rates: convert to list of length 1
       assert aspiration_flow_rates is None or isinstance(aspiration_flow_rates, int) or \
         len(aspiration_flow_rates) == 1, \
@@ -979,7 +965,6 @@ class LiquidHandler(MachineFrontend):
       vols=volume,
       flow_rates=aspiration_flow_rates,
       **aspiration_kwargs)
->>>>>>> Stashed changes
       await self.dispense(
         resources=[targets],
         vols=volume,
@@ -1267,6 +1252,29 @@ class LiquidHandler(MachineFrontend):
 
       print("N to N transfer coming soon")
 
+
+      def compute_transfers(source_vol, target_vol):
+
+          aspirations = [[] for _ in range(len(target_vol))]
+
+          for i in range(len(source_vol)):
+              for j in range (len(target_vol)):
+                  s = source_vol[-i -1]
+                  t = target_vol[-j -1]
+                  if s == 0 or t == 0:
+                      #print(f'skip s: {s} t: {t}')
+                      continue
+                  elif s > t:
+                      #print(f's: {s} > t: {t}, setting i: {i} j: {j} to {t}')
+                      aspirations[j - i].insert(0, t)
+                      source_vol[-i -1] -= t
+                      target_vol[-j -1] = 0
+                  else:
+                      #print(f's: {s} < t: {t}, setting i: {i} j: {j} to {s}')
+                      aspirations[j - i].insert(0, s)
+                      target_vol[-j -1] -= s
+                      source_vol[-i -1] = 0
+          return aspirations
       """ if len(use_channels) == len(sources):
         # check for any combinations that are not possible
         # we can aspirate all sources into tips in one go
