@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import inspect
 import json
 import logging
@@ -51,6 +52,22 @@ from .standard import (
 )
 
 logger = logging.getLogger("pylabrobot")
+
+@dataclass(frozen=True)
+class TransferWell:
+    volume: float
+    container: Container
+
+
+@dataclass(frozen=True)
+class TransferAspiration(TransferWell):
+    pass
+
+
+@dataclass(frozen=True)
+class TransferDispense(TransferWell):
+    homogenization_volume: float = 0
+    homogenization_cycles: int = 0
 
 
 class LiquidHandler(MachineFrontend):
@@ -844,6 +861,51 @@ class LiquidHandler(MachineFrontend):
 
     if end_delay > 0:
       time.sleep(end_delay)
+
+
+
+  async def transfer_multiple(
+      self: LiquidHandler,
+      instructions: List[tuple[TransferAspiration, TransferDispense]],
+  ):
+    TOTAL_AVAILABLE_TIPS = 8
+    assert (
+        len(instructions) <= TOTAL_AVAILABLE_TIPS
+    ), f"Cannot have more than {TOTAL_AVAILABLE_TIPS} instructions, got {len(instructions)}"
+    assert not any(
+        instruction[0].volume < instruction[1].volume for instruction in instructions
+    ), f"Cannot dispense more than you aspirate"
+
+    channels = list(range(len(instructions)))
+    await self.aspirate(
+        resources=[instruction[0].container for instruction in instructions],
+        vols=[instruction[0].volume for instruction in instructions],
+        use_channels=channels,
+        # todo should pass all backend kwargs from transfer to aspirate
+    )
+    await self.dispense(
+        resources=[instruction[1].container for instruction in instructions],
+        vols=[instruction[1].volume for instruction in instructions],
+        use_channels=channels,
+    )
+
+    d_cycles = [instruction[1] for instruction in instructions]
+    wells_to_mix = [d if d.homogenization_volume * d.homogenization_cycles > 0 else None for d in d_cycles]
+
+    if all(m is None for m in wells_to_mix):  # no mixing
+        return
+
+    if any(m is None for m in wells_to_mix):  # some mixing
+        raise NotImplementedError("Cannot mix some wells and not others")
+
+    # mix all wells
+    await self.aspirate(
+        [instruction.container for instruction in wells_to_mix],
+        [0] * len(wells_to_mix),
+        # todo underestimate, because one might already have liquid in it
+        homogenization_volume=[wtm.homogenization_volume for wtm in wells_to_mix],
+        homogenization_cycles=[wtm.homogenization_cycles for wtm in wells_to_mix],
+    )
 
   async def transfer(
     self,
